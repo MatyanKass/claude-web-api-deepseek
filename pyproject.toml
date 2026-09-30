@@ -24,7 +24,9 @@ dev = ["httpx>=0.27", "ruff>=0.16", "mypy>=1.11"]
 claude-web-api = "claude_web_api.app:main"
 
 [project.urls]
-Homepage = "https://github.com/beekamai/claude-web-api"
+Homepage = "https://github.com/MatyanKass/claude-web-api-deepseek"
+Repository = "https://github.com/MatyanKass/claude-web-api-deepseek"
+Upstream = "https://github.com/beekamai/claude-web-api"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_web_api"]

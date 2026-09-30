@@ -2,6 +2,20 @@
 
 [Русская версия ниже / Russian version below](#claude-web-api-ru)
 
+> **Fork and attribution:** this repository is a derivative work based on
+> [beekamai/claude-web-api](https://github.com/beekamai/claude-web-api), created
+> by **beekamai** and distributed under the MIT License. This fork develops a
+> DeepSeek Web provider while preserving the original copyright and history.
+> The DeepSeek transport is currently a work in progress and remains disabled
+> until browser authentication, proof-of-work and streaming are verified.
+>
+> **Доработка и авторство:** этот репозиторий основан на проекте
+> [beekamai/claude-web-api](https://github.com/beekamai/claude-web-api),
+> созданном **beekamai** и опубликованном под лицензией MIT. В этой версии
+> ведётся разработка провайдера DeepSeek Web с сохранением исходного авторства
+> и истории. Транспорт DeepSeek пока находится в разработке и остаётся
+> выключенным до проверки авторизации, proof-of-work и потоковой выдачи.
+
 A local bridge that serves the **Anthropic Messages API** and the **OpenAI Chat
 Completions API** on `127.0.0.1`, and answers them from a real, logged-in
 `claude.ai` session driven in a [Camoufox](https://github.com/daijro/camoufox)

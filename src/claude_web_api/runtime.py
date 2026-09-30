@@ -23,6 +23,10 @@ from claude_web_api.providers.claude_web import (
     CLAUDE_WEB_PROVIDER_ID,
     ClaudeWebProviderAdapter,
 )
+from claude_web_api.providers.deepseek_web import (
+    DEEPSEEK_WEB_PROVIDER_ID,
+    DeepSeekWebProvider,
+)
 from claude_web_api.providers.registry import ProviderRegistry
 from claude_web_api.sanitize import public_error_message
 from claude_web_api.session.claude import ClaudeSession
@@ -198,6 +202,7 @@ session = ClaudeSession(
     project_prompt_lease_file=PROJECT_PROMPT_LEASE_FILE,
 )
 claude_provider = ClaudeWebProviderAdapter(session)
+deepseek_provider = DeepSeekWebProvider()
 provider_registry = ProviderRegistry()
 provider_registry.register(
     CLAUDE_WEB_PROVIDER_ID,
@@ -209,6 +214,7 @@ provider_registry.register(
         == CLAUDE_WEB_PROVIDER_ID
     ),
 )
+provider_registry.register(DEEPSEEK_WEB_PROVIDER_ID, deepseek_provider)
 enrollment = ProfileEnrollmentManager()
 profile_login_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
 # Client installs are long-running; the panel polls their state.
@@ -246,6 +252,24 @@ def is_active_claude_profile(profile: dict[str, Any]) -> bool:
 
 def provider_capabilities_snapshot() -> dict[str, dict[str, object]]:
     snapshot = provider_registry.capabilities_snapshot()
+    deepseek_health = deepseek_provider.health()
+    deepseek_snapshot = snapshot.setdefault(
+        DEEPSEEK_WEB_PROVIDER_ID,
+        {
+            "tool_continuation": "unsupported",
+            "streaming": False,
+            "thinking": False,
+            "profiles": True,
+            "ready": deepseek_health.ready,
+            "detail": deepseek_health.detail,
+        },
+    )
+    deepseek_snapshot.update(
+        {
+            "ready": deepseek_health.ready,
+            "detail": deepseek_health.detail,
+        }
+    )
     snapshot.setdefault(
         GROK_WEB_PROVIDER_ID,
         {
