@@ -186,7 +186,7 @@ async def control_index():
 
 @app.get("/health")
 async def health():
-    return runtime.session.health_snapshot()
+    return runtime.active_health_snapshot()
 
 
 @app.get("/health/live")
@@ -200,7 +200,7 @@ async def health_live():
 @app.get("/health/ready")
 async def health_ready():
     """Non-blocking Camoufox readiness snapshot."""
-    snapshot = runtime.session.health_snapshot()
+    snapshot = runtime.active_health_snapshot()
     if not snapshot["ok"]:
         return JSONResponse(status_code=503, content=snapshot)
     return snapshot

@@ -290,6 +290,49 @@ def active_provider_id() -> str:
     )
 
 
+def active_health_snapshot() -> dict[str, Any]:
+    if active_provider_id() != DEEPSEEK_WEB_PROVIDER_ID:
+        return session.health_snapshot()
+    health = deepseek_provider.health()
+    identity = deepseek_provider.profile_identity
+    return {
+        "ok": health.ready,
+        "provider": DEEPSEEK_WEB_PROVIDER_ID,
+        "profile_id": identity.profile_id if identity is not None else None,
+        "browser": {
+            "phase": health.phase,
+            "live": health.live,
+            "ready": health.ready,
+            "detail": health.detail,
+        },
+        "account": {
+            "authenticated": health.ready,
+            "name": identity.account_name if identity is not None else None,
+            "email": (
+                identity.account_email_masked if identity is not None else None
+            ),
+        },
+        "models": {
+            "available": [
+                {
+                    "id": "deepseek-web",
+                    "label": "DeepSeek Web",
+                    "available": True,
+                    "access_status": "available",
+                },
+                {
+                    "id": "deepseek-reasoner",
+                    "label": "DeepSeek Reasoner",
+                    "available": True,
+                    "access_status": "available",
+                },
+            ]
+            if health.ready
+            else [],
+        },
+    }
+
+
 async def start_deepseek_profile(profile: dict[str, Any]) -> None:
     """Start the selected DeepSeek profile and publish it atomically."""
     global deepseek_provider, deepseek_transport

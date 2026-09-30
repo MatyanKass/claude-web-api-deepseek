@@ -86,7 +86,7 @@ async def control_state():
     persona_compilation = ControlConfig.persona_compilation_for(
         snapshot.get("behavior", {}),
     )
-    health = runtime.session.health_snapshot()
+    health = runtime.active_health_snapshot()
     for profile in snapshot["profiles"]:
         if profile["id"] == health.get("profile_id"):
             profile["runtime"] = {
