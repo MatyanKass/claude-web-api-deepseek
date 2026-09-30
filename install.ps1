@@ -1,6 +1,6 @@
 # One-file installer: fetch the repository, build the portable runtime, start.
 #
-#   irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/MatyanKass/claude-web-api-deepseek/main/install.ps1 | iex
 #
 # Re-running it updates an existing installation in place. Nothing is installed
 # system-wide and nothing under the install directory is overwritten except the
@@ -9,7 +9,7 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$repo = if ($env:CLAUDE_WEB_API_REPO) { $env:CLAUDE_WEB_API_REPO } else { "beekamai/claude-web-api" }
+$repo = if ($env:CLAUDE_WEB_API_REPO) { $env:CLAUDE_WEB_API_REPO } else { "MatyanKass/claude-web-api-deepseek" }
 $branch = if ($env:CLAUDE_WEB_API_BRANCH) { $env:CLAUDE_WEB_API_BRANCH } else { "main" }
 function Test-AsciiPath($path) { return ($path -notmatch '[^\x00-\x7F]') }
 # The portable Python, pip and the Camoufox launcher do not all survive a

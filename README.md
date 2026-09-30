@@ -77,7 +77,7 @@ One line in PowerShell — it fetches the repository, builds the portable runtim
 and starts the bridge:
 
 ```powershell
-irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/MatyanKass/claude-web-api-deepseek/main/install.ps1 | iex
 ```
 
 It installs into `%USERPROFILE%\claude-web-api`, or `C:\claude-web-api` when the
@@ -89,8 +89,8 @@ without touching the browser profile, `control_config.json` or the journal. Set
 Manually, if you prefer:
 
 ```powershell
-git clone https://github.com/beekamai/claude-web-api
-cd claude-web-api
+git clone https://github.com/MatyanKass/claude-web-api-deepseek
+cd claude-web-api-deepseek
 .\scripts\setup.ps1
 ```
 
@@ -230,7 +230,7 @@ OpenAI-совместимый клиент — через `/v1/chat/completions`
 и запустит мост:
 
 ```powershell
-irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/MatyanKass/claude-web-api-deepseek/main/install.ps1 | iex
 ```
 
 Ставится в `%USERPROFILE%\claude-web-api`, а если в имени пользователя есть
@@ -243,8 +243,8 @@ irm https://raw.githubusercontent.com/beekamai/claude-web-api/main/install.ps1 |
 Вручную:
 
 ```powershell
-git clone https://github.com/beekamai/claude-web-api
-cd claude-web-api
+git clone https://github.com/MatyanKass/claude-web-api-deepseek
+cd claude-web-api-deepseek
 .\scripts\setup.ps1
 ```
 
