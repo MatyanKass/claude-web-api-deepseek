@@ -39,6 +39,12 @@ from claude_web_api.providers.contracts import (
     ProviderTurn,
     ProviderTurnRequest,
 )
+from claude_web_api.providers.deepseek_web import (
+    DEEPSEEK_WEB_PROVIDER_ID,
+    DeepSeekProviderNotReadyError,
+    DeepSeekUnsupportedToolsError,
+    DeepSeekWebProviderError,
+)
 from claude_web_api.sanitize import sanitize_public_text
 from claude_web_api.session.claude import (
     ClaudeAccountIdentityError,
@@ -174,6 +180,61 @@ def _rollover_message(body: CompletionsIn, reason: str) -> str:
         + "\n\nCURRENT_USER_REQUEST\n"
         + actionable_input(body.messages)
     )
+
+
+async def deepseek_request(
+    body: CompletionsIn,
+    *,
+    client_session_id: str | None,
+    event_sink: Callable[[dict[str, Any]], None] | None,
+    behavior_snapshot: dict[str, Any],
+    persona_instruction: str,
+) -> NativeTurn:
+    """Execute a provider-neutral turn against the active DeepSeek profile."""
+    if body.tools:
+        raise HTTPException(
+            400,
+            "DeepSeek Web does not expose a verified native function-calling "
+            "channel; remove tools from this request",
+        )
+    user_input = actionable_input(body.messages)
+    fresh_chat = bool(
+        body.new_chat
+        or (not client_session_id and _client_starts_fresh_chat(body))
+    )
+    outbound_message = user_input
+    history = history_text(body.messages[:-1])
+    if fresh_chat and history:
+        outbound_message = (
+            "Continue the conversation represented by the transcript below.\n\n"
+            "EARLIER_CONVERSATION\n"
+            + history[-60_000:]
+            + "\n\nCURRENT_USER_REQUEST\n"
+            + user_input
+        )
+    outbound_message = user_selected_persona_message(
+        outbound_message,
+        persona_instruction,
+    )
+    provider = runtime.provider_registry.resolve(
+        provider_id=DEEPSEEK_WEB_PROVIDER_ID,
+        profile_id=runtime.active_profile_id(),
+    )
+    turn = await provider.complete(
+        ProviderTurnRequest(
+            message=outbound_message,
+            timeout_seconds=body.timeout,
+            new_conversation=fresh_chat,
+            parallel_tool_calls=False,
+            model=body.model,
+            reasoning_mode=str(behavior_snapshot["thinking"]),
+            reasoning_effort=body.reasoning_effort,
+            privacy_mode=str(behavior_snapshot["privacy"]),
+            client_session_id=client_session_id,
+        ),
+        event_sink=_provider_event_sink(event_sink),
+    )
+    return _provider_turn_as_native(turn)
 
 def _native_tools_with_runtime(
     body: CompletionsIn,
@@ -429,6 +490,14 @@ async def run_native_with_limits(
     event_sink: Callable[[dict[str, Any]], None] | None,
 ) -> NativeTurn:
     behavior, persona_instruction = runtime.control.behavior_snapshot()
+    if runtime.active_provider_id() == DEEPSEEK_WEB_PROVIDER_ID:
+        return await deepseek_request(
+            body,
+            client_session_id=client_session_id,
+            event_sink=event_sink,
+            behavior_snapshot=behavior,
+            persona_instruction=persona_instruction,
+        )
     try:
         return await native_request(
             body,
@@ -707,7 +776,7 @@ def begin_request_telemetry(
     streaming: bool,
 ) -> None:
     privacy_mode = str(runtime.control.behavior().get("privacy") or "keep")
-    profile_id = runtime.session.current_profile_id()
+    profile_id = runtime.active_profile_id()
     runtime.telemetry.begin(
         request_id,
         model,
@@ -751,10 +820,8 @@ def finish_request_telemetry(
         thinking_text=native.thinking if native is not None else None,
         tool_call_count=len(parsed.tool_calls) if parsed is not None else 0,
         resolved_model=resolved_model,
-        final_profile_id=runtime.session.current_profile_id(),
-        final_provider_id=runtime.profile_provider_id(
-            runtime.session.current_profile_id()
-        ),
+        final_profile_id=runtime.active_profile_id(),
+        final_provider_id=runtime.active_provider_id(),
         capture_content=runtime.telemetry_content_enabled(),
         retention_days=int(settings.get("retention_days") or 30),
         max_requests=int(settings.get("max_requests") or 5_000),
@@ -794,6 +861,12 @@ def exception_status(exc: Exception) -> int:
         return 503
     if isinstance(exc, ClaudeServiceUnavailableError):
         return 503
+    if isinstance(exc, DeepSeekUnsupportedToolsError):
+        return 400
+    if isinstance(exc, DeepSeekProviderNotReadyError):
+        return 503
+    if isinstance(exc, DeepSeekWebProviderError):
+        return 502
     if isinstance(
         exc,
         (

@@ -79,7 +79,7 @@ class ControlConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config = ControlConfig(Path(temporary) / "control_config.json")
             self.assertEqual(
-                ("claude_web", "grok_web"),
+                ("claude_web", "deepseek_web", "grok_web"),
                 SUPPORTED_PROFILE_PROVIDERS,
             )
             self.assertEqual(
@@ -105,9 +105,15 @@ class ControlConfigTests(unittest.TestCase):
             )
 
             before = config.snapshot()
-            with self.assertRaisesRegex(ValueError, "claude_web, grok_web"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "claude_web, deepseek_web, grok_web",
+            ):
                 config.create_profile("Unknown", provider="unknown")
-            with self.assertRaisesRegex(ValueError, "claude_web, grok_web"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "claude_web, deepseek_web, grok_web",
+            ):
                 config.update_profile(
                     grok["id"],
                     {"provider": "unknown"},
@@ -137,7 +143,7 @@ class ControlConfigTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 RuntimeError,
-                "profile 'unknown'.*claude_web, grok_web",
+                "profile 'unknown'.*claude_web, deepseek_web, grok_web",
             ):
                 ControlConfig(config_path)
 

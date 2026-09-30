@@ -29,6 +29,7 @@ CONFIG_VERSION = 3
 DEFAULT_PROFILE_PROVIDER = "claude_web"
 SUPPORTED_PROFILE_PROVIDERS = (
     "claude_web",
+    "deepseek_web",
     "grok_web",
 )
 _SUPPORTED_PROFILE_PROVIDER_IDS = frozenset(SUPPORTED_PROFILE_PROVIDERS)

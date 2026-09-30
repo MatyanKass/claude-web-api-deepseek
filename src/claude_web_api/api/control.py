@@ -361,7 +361,7 @@ async def update_behavior(body: BehaviorPatch):
 async def create_profile(body: ProfileCreate):
     try:
         profile = runtime.control.create_profile(body.name, body.provider)
-        runtime.bind_claude_profile_route(profile)
+        runtime.bind_profile_route(profile)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     runtime.telemetry.log(
@@ -472,7 +472,7 @@ async def _inspect_profile_login_once(profile_id: str):
     active_claude_profile = runtime.is_active_claude_profile(profile)
     login_running = await runtime.enrollment.is_running(profile_id)
     if (
-        provider_id != CLAUDE_WEB_PROVIDER_ID
+        provider_id == runtime.GROK_WEB_PROVIDER_ID
         and not login_running
         and profile.get("status") in {"ready", "protocol_unverified"}
     ):
@@ -644,11 +644,10 @@ async def _inspect_profile_login_once(profile_id: str):
         )
         result["status"] = "identity_unverified"
         result["ready"] = False
-        provider_name = (
-            "Claude"
-            if provider_id == CLAUDE_WEB_PROVIDER_ID
-            else "Grok"
-        )
+        provider_name = {
+            CLAUDE_WEB_PROVIDER_ID: "Claude",
+            runtime.DEEPSEEK_WEB_PROVIDER_ID: "DeepSeek",
+        }.get(provider_id, "Grok")
         result["account_error"] = (
             f"The web account is visible, but {provider_name} has not "
             "exposed a stable account identity in the verified browser "
@@ -688,7 +687,7 @@ async def _inspect_profile_login_once(profile_id: str):
             f"Профиль «{profile['name']}» использует уже добавленный аккаунт",
         )
         return {"ok": True, "login": result}
-    if provider_id != CLAUDE_WEB_PROVIDER_ID:
+    if provider_id == runtime.GROK_WEB_PROVIDER_ID:
         runtime.control.update_profile(
             profile_id,
             {
@@ -840,13 +839,13 @@ async def activate_profile(profile_id: str):
     provider_id = str(
         profile.get("provider") or CLAUDE_WEB_PROVIDER_ID
     )
-    if provider_id != CLAUDE_WEB_PROVIDER_ID:
+    if provider_id == runtime.GROK_WEB_PROVIDER_ID:
         raise HTTPException(
             409,
             "Grok Web cannot be activated until its authenticated Chrome "
             "stream protocol has been verified.",
         )
-    runtime.bind_claude_profile_route(profile)
+    runtime.bind_profile_route(profile)
     limited_until = profile.get("limited_until")
     if isinstance(limited_until, (int, float)) and limited_until > time.time():
         raise HTTPException(
@@ -860,6 +859,21 @@ async def activate_profile(profile_id: str):
             "cannot switch profile while Claude is waiting for tool_result",
         )
     old_profile_id = runtime.control.snapshot()["active_profile"]
+    if provider_id == runtime.DEEPSEEK_WEB_PROVIDER_ID:
+        try:
+            await runtime.start_deepseek_profile(profile)
+            runtime.control.set_active_profile(profile_id)
+        except Exception as exc:
+            raise HTTPException(503, str(exc)) from exc
+        runtime.telemetry.log(
+            "INFO",
+            "Profiles",
+            f"Активирован профиль «{profile['name']}»",
+        )
+        return {
+            "ok": True,
+            "health": runtime.deepseek_provider.health().__dict__,
+        }
     runtime_profiles = runtime.runtime_profiles()
     try:
         await runtime.session.sync_profiles(
@@ -876,6 +890,7 @@ async def activate_profile(profile_id: str):
             raise RuntimeError(
                 "target profile is logged into a different or duplicate account"
             )
+        await runtime.stop_deepseek_provider()
     except Exception as exc:
         if old_profile_id != profile_id:
             try:
@@ -915,11 +930,10 @@ async def select_profile_model(profile_id: str, body: ModelSelect):
             and item.get("access_status") == "available"
         )
     }
-    provider_alias = (
-        "grok-web"
-        if profile.get("provider") == runtime.GROK_WEB_PROVIDER_ID
-        else "claude-web"
-    )
+    provider_alias = {
+        runtime.GROK_WEB_PROVIDER_ID: "grok-web",
+        runtime.DEEPSEEK_WEB_PROVIDER_ID: "deepseek-web",
+    }.get(str(profile.get("provider")), "claude-web")
     if body.model not in {"auto", provider_alias}:
         if not profile.get("models"):
             raise HTTPException(

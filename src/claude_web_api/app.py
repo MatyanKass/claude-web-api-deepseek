@@ -46,6 +46,15 @@ async def lifespan(app: FastAPI):
     del app
     await runtime.session.start()
     await runtime.session.start_watchdog()
+    if runtime.active_provider_id() == runtime.DEEPSEEK_WEB_PROVIDER_ID:
+        try:
+            await runtime.start_deepseek_profile(runtime.active_profile())
+        except Exception as exc:
+            runtime.telemetry.log(
+                "ERROR",
+                "DeepSeek",
+                f"Не удалось запустить активный профиль DeepSeek: {exc}",
+            )
     telemetry_settings = runtime.control.telemetry_settings()
     try:
         # Recovery is only safe after session.start() has acquired the
@@ -79,6 +88,7 @@ async def lifespan(app: FastAPI):
         telemetry_task.cancel()
         await asyncio.gather(telemetry_task, return_exceptions=True)
         await runtime.enrollment.stop()
+        await runtime.stop_deepseek_provider()
         await runtime.session.stop()
         await runtime.telemetry.close_store_executor()
 

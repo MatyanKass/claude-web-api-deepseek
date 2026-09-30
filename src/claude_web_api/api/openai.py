@@ -565,6 +565,19 @@ async def openai_compat(
 
 @router.get("/v1/models")
 async def list_models():
+    if runtime.active_provider_id() == runtime.DEEPSEEK_WEB_PROVIDER_ID:
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "deepseek.com",
+                }
+                for model_id in ("deepseek-web", "deepseek-reasoner")
+            ],
+        }
     rows = [
         {
             "id": "claude-web",

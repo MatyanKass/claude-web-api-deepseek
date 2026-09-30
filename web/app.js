@@ -29,6 +29,7 @@
   const labels = {
     provider: {
       claude_web: "Claude Web",
+      deepseek_web: "DeepSeek Web",
       grok_web: "Grok Web",
     },
     privacy: {
@@ -160,11 +161,21 @@
 
   function profileProvider(profile) {
     const id = String(profile?.provider || "claude_web");
+    const sites = {
+      claude_web: "claude.ai",
+      deepseek_web: "chat.deepseek.com",
+      grok_web: "grok.com",
+    };
+    const products = {
+      claude_web: "Claude",
+      deepseek_web: "DeepSeek",
+      grok_web: "Grok",
+    };
     return {
       id,
       label: labels.provider[id] || id,
-      site: id === "grok_web" ? "grok.com" : "claude.ai",
-      product: id === "grok_web" ? "Grok" : "Claude",
+      site: sites[id] || id,
+      product: products[id] || id,
     };
   }
 
@@ -177,6 +188,12 @@
   }
 
   function providerRuntimeReady(profile) {
+    if (
+      profileProvider(profile).id === "deepseek_web"
+      && String(profile?.status || "") === "ready"
+    ) {
+      return true;
+    }
     return providerCapabilities(profile).ready !== false;
   }
 
@@ -2483,7 +2500,9 @@
     else if (authenticated) {
       $("#drawer-title").textContent = provider.id === "claude_web"
         ? "Настраиваем Claude Project…"
-        : "Grok-транспорт не проверен";
+        : provider.id === "deepseek_web"
+          ? "Проверяем DeepSeek-транспорт…"
+          : "Grok-транспорт не проверен";
     } else if (providerBlocked) {
       $("#drawer-title").textContent = `${provider.product} заблокировал автоматизированное окно`;
     }

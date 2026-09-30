@@ -32,9 +32,11 @@ UUID_TEXT_RE = re.compile(
     re.I,
 )
 CLAUDE_WEB_PROVIDER = "claude_web"
+DEEPSEEK_WEB_PROVIDER = "deepseek_web"
 GROK_WEB_PROVIDER = "grok_web"
 PROVIDER_ENTRY_URLS = {
     CLAUDE_WEB_PROVIDER: "https://claude.ai/new",
+    DEEPSEEK_WEB_PROVIDER: "https://chat.deepseek.com/",
     GROK_WEB_PROVIDER: "https://grok.com/",
 }
 
@@ -434,6 +436,8 @@ class ProfileEnrollmentManager:
                 return snapshot
             if enrollment.provider == GROK_WEB_PROVIDER:
                 return await self._inspect_grok_unlocked(enrollment)
+            if enrollment.provider == DEEPSEEK_WEB_PROVIDER:
+                return await self._inspect_deepseek_unlocked(enrollment)
             try:
                 result = await asyncio.wait_for(
                     enrollment.page.evaluate(
@@ -779,6 +783,127 @@ class ProfileEnrollmentManager:
                 enrollment.status = "error"
                 enrollment.last_error = f"{type(exc).__name__}: {exc}"
                 return self._snapshot(enrollment)
+
+    async def _inspect_deepseek_unlocked(
+        self,
+        enrollment: Enrollment,
+    ) -> dict[str, Any]:
+        """Verify DeepSeek auth without exporting the bearer token."""
+        try:
+            result = await asyncio.wait_for(
+                enrollment.page.evaluate(
+                    """
+                    async () => {
+                      const raw = localStorage.getItem('userToken');
+                      if (!raw) return {
+                        authenticated: false,
+                        reason: 'missing_user_token',
+                        url: location.href
+                      };
+                      let token = raw;
+                      try {
+                        const parsed = JSON.parse(raw);
+                        token = typeof parsed === 'string'
+                          ? parsed
+                          : String(parsed?.value || parsed?.token || raw);
+                      } catch {}
+                      let response;
+                      try {
+                        response = await fetch(
+                          '/api/v0/chat_session/fetch_page?count=1',
+                          {
+                            credentials: 'include',
+                            cache: 'no-store',
+                            headers: {
+                              Accept: 'application/json',
+                              Authorization: `Bearer ${token}`
+                            }
+                          }
+                        );
+                      } catch {
+                        return {
+                          authenticated: false,
+                          reason: 'network',
+                          url: location.href
+                        };
+                      }
+                      if (!response.ok) return {
+                        authenticated: false,
+                        reason: `session_probe_${response.status}`,
+                        url: location.href
+                      };
+                      const digest = new Uint8Array(await crypto.subtle.digest(
+                        'SHA-256', new TextEncoder().encode(token)
+                      ));
+                      const hex = [...digest]
+                        .map((value) => value.toString(16).padStart(2, '0'))
+                        .join('')
+                        .slice(0, 32);
+                      const accountUuid = [
+                        hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+                        hex.slice(16, 20), hex.slice(20, 32)
+                      ].join('-');
+                      return {
+                        authenticated: true,
+                        accountUuid,
+                        url: location.href,
+                        hasComposer: Boolean(document.querySelector(
+                          'textarea,[contenteditable="true"],[role="textbox"]'
+                        ))
+                      };
+                    }
+                    """
+                ),
+                timeout=15,
+            )
+            if not isinstance(result, dict):
+                raise RuntimeError("DeepSeek login probe returned invalid data")
+            account_uuid = str(result.get("accountUuid") or "")
+            authenticated = bool(result.get("authenticated") and account_uuid)
+            enrollment.status = (
+                "authenticated" if authenticated else "waiting_for_login"
+            )
+            enrollment.account_uuid = account_uuid or None
+            enrollment.organization_uuid = None
+            enrollment.project_id = None
+            enrollment.last_error = None
+            models = [
+                {
+                    "id": "deepseek-web",
+                    "label": "DeepSeek Web",
+                    "available": True,
+                    "access_status": "available",
+                    "source": "verified_web_transport",
+                },
+                {
+                    "id": "deepseek-reasoner",
+                    "label": "DeepSeek Reasoner",
+                    "available": True,
+                    "access_status": "available",
+                    "source": "verified_web_transport",
+                },
+            ] if authenticated else []
+            return {
+                **self._snapshot(enrollment),
+                "authenticated": authenticated,
+                "authentication_state": (
+                    "verified" if authenticated else "auth_pending"
+                ),
+                "account": {
+                    "authenticated": authenticated,
+                    "name": "DeepSeek Web" if authenticated else None,
+                    "email": None,
+                    "uuid_suffix": account_uuid[-8:] or None,
+                },
+                "models": models,
+                "organization_uuid_suffix": None,
+                "has_composer": bool(result.get("hasComposer")),
+                "reason": result.get("reason"),
+            }
+        except Exception as exc:
+            enrollment.status = "error"
+            enrollment.last_error = f"{type(exc).__name__}: {exc}"
+            return self._snapshot(enrollment)
 
     async def _inspect_grok_unlocked(
         self,
@@ -1248,11 +1373,14 @@ class ProfileEnrollmentManager:
             enrollment = self._enrollments.get(profile_id)
             if enrollment is None:
                 raise KeyError(profile_id)
-            if enrollment.provider == GROK_WEB_PROVIDER:
+            if enrollment.provider in {
+                GROK_WEB_PROVIDER,
+                DEEPSEEK_WEB_PROVIDER,
+            }:
                 enrollment.organization_uuid = None
                 enrollment.project_id = None
                 return {
-                    "provider": GROK_WEB_PROVIDER,
+                    "provider": enrollment.provider,
                     "required": False,
                     "status": "not_required",
                     "project_id": None,

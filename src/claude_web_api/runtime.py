@@ -30,6 +30,7 @@ from claude_web_api.providers.deepseek_web import (
 from claude_web_api.providers.registry import ProviderRegistry
 from claude_web_api.sanitize import public_error_message
 from claude_web_api.session.claude import ClaudeSession
+from claude_web_api.session.deepseek import DeepSeekCamoufoxTransport
 from claude_web_api.telemetry.runtime import RuntimeTelemetry
 from claude_web_api.telemetry.store import TelemetryStore
 
@@ -140,6 +141,30 @@ def resolve_request_model(
     profile_id: str | None = None,
 ) -> str | None:
     requested = str(requested or "").strip()
+    target_profile_id = profile_id or active_profile_id()
+    if profile_provider_id(target_profile_id) == DEEPSEEK_WEB_PROVIDER_ID:
+        aliases = {
+            "",
+            "auto",
+            "deepseek-web",
+            "deepseek-chat",
+            "deepseek-v4-flash",
+            "deepseek-reasoner",
+            "deepseek-v4-pro",
+            "default",
+            "flash",
+            "expert",
+            "pro",
+        }
+        if requested not in aliases:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported DeepSeek Web model: {requested!r}.",
+            )
+        selected = str(control.profile(target_profile_id).get("model") or "auto")
+        if requested not in {"", "auto", "deepseek-web"}:
+            return requested
+        return None if selected in {"", "auto", "deepseek-web"} else selected
     # Completion requests currently execute on the Claude Camoufox runtime.
     # The persisted control-plane active profile can legitimately name a
     # fail-closed provider (for example after restoring a newer config), so it
@@ -203,6 +228,7 @@ session = ClaudeSession(
 )
 claude_provider = ClaudeWebProviderAdapter(session)
 deepseek_provider = DeepSeekWebProvider()
+deepseek_transport: DeepSeekCamoufoxTransport | None = None
 provider_registry = ProviderRegistry()
 provider_registry.register(
     CLAUDE_WEB_PROVIDER_ID,
@@ -234,6 +260,77 @@ def bind_claude_profile_route(profile: dict[str, Any]) -> None:
         CLAUDE_WEB_PROVIDER_ID,
         replace=True,
     )
+
+
+def bind_profile_route(profile: dict[str, Any]) -> None:
+    """Keep the provider registry aligned with mutable profile rows."""
+    provider_id = str(
+        profile.get("provider") or CLAUDE_WEB_PROVIDER_ID
+    )
+    if provider_id not in provider_registry.provider_ids:
+        return
+    provider_registry.bind_profile(
+        str(profile["id"]),
+        provider_id,
+        replace=True,
+    )
+
+
+def active_profile() -> dict[str, Any]:
+    return control.active_profile()
+
+
+def active_profile_id() -> str:
+    return str(active_profile()["id"])
+
+
+def active_provider_id() -> str:
+    return str(
+        active_profile().get("provider") or CLAUDE_WEB_PROVIDER_ID
+    )
+
+
+async def start_deepseek_profile(profile: dict[str, Any]) -> None:
+    """Start the selected DeepSeek profile and publish it atomically."""
+    global deepseek_provider, deepseek_transport
+    transport = DeepSeekCamoufoxTransport(
+        profile_id=str(profile["id"]),
+        profile_path=str(profile["path"]),
+        display_name=str(profile.get("name") or profile["id"]),
+        headless=HEADLESS,
+        outbound_proxy=(
+            profile.get("proxy")
+            if isinstance(profile.get("proxy"), dict)
+            else None
+        ),
+    )
+    await transport.start()
+    old_transport = deepseek_transport
+    provider = DeepSeekWebProvider(transport)
+    deepseek_transport = transport
+    deepseek_provider = provider
+    provider_registry.register(
+        DEEPSEEK_WEB_PROVIDER_ID,
+        provider,
+        profile_ids=(str(profile["id"]),),
+        replace=True,
+    )
+    if old_transport is not None and old_transport is not transport:
+        await old_transport.stop()
+
+
+async def stop_deepseek_provider() -> None:
+    global deepseek_provider, deepseek_transport
+    transport = deepseek_transport
+    deepseek_transport = None
+    deepseek_provider = DeepSeekWebProvider()
+    provider_registry.register(
+        DEEPSEEK_WEB_PROVIDER_ID,
+        deepseek_provider,
+        replace=True,
+    )
+    if transport is not None:
+        await transport.stop()
 
 
 def is_active_claude_profile(profile: dict[str, Any]) -> bool:
