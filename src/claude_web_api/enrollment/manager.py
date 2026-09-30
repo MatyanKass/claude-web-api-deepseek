@@ -371,6 +371,8 @@ class ProfileEnrollmentManager:
                 if browser_proxy:
                     launch["proxy"] = browser_proxy
                     launch["geoip"] = True
+                if provider == DEEPSEEK_WEB_PROVIDER:
+                    launch["main_world_eval"] = True
                 camoufox = AsyncCamoufox(**launch)
                 browser_engine = "camoufox"
             context = None
@@ -792,7 +794,7 @@ class ProfileEnrollmentManager:
         try:
             result = await asyncio.wait_for(
                 enrollment.page.evaluate(
-                    """
+                    """mw:
                     async () => {
                       const raw = localStorage.getItem('userToken');
                       if (!raw) return {

@@ -330,6 +330,7 @@ class DeepSeekCamoufoxTransport:
                     "persistent_context": True,
                     "user_data_dir": str(self.profile_path),
                     "humanize": False,
+                    "main_world_eval": True,
                 }
                 if browser_proxy:
                     launch["proxy"] = browser_proxy
@@ -429,7 +430,7 @@ class DeepSeekCamoufoxTransport:
             try:
                 result = await asyncio.wait_for(
                     self._page.evaluate(
-                        _COMPLETE_SCRIPT,
+                        "mw:" + _COMPLETE_SCRIPT,
                         {
                             "operationId": operation_id,
                             "completionPath": DEEPSEEK_COMPLETION_PATH,
@@ -474,7 +475,7 @@ class DeepSeekCamoufoxTransport:
                 self._clear_active()
 
     async def _probe_auth_unlocked(self) -> None:
-        result = await self._page.evaluate(_AUTH_PROBE_SCRIPT)
+        result = await self._page.evaluate("mw:" + _AUTH_PROBE_SCRIPT)
         authenticated = bool(
             isinstance(result, dict) and result.get("authenticated")
         )
