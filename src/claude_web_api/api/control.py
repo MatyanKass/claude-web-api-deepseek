@@ -378,6 +378,10 @@ async def launch_profile_login(profile_id: str):
         profile = runtime.control.profile(profile_id)
     except KeyError as exc:
         raise HTTPException(404, "profile not found") from exc
+    if profile.get("provider") == runtime.DEEPSEEK_WEB_PROVIDER_ID:
+        identity = runtime.deepseek_provider.profile_identity
+        if identity is not None and identity.profile_id == profile_id:
+            await runtime.stop_deepseek_provider()
     if runtime.is_active_claude_profile(profile):
         health = runtime.session.health_snapshot()
         browser = health.get("browser", {})
@@ -471,6 +475,32 @@ async def _inspect_profile_login_once(profile_id: str):
     )
     active_claude_profile = runtime.is_active_claude_profile(profile)
     login_running = await runtime.enrollment.is_running(profile_id)
+    if (
+        provider_id == runtime.DEEPSEEK_WEB_PROVIDER_ID
+        and not login_running
+    ):
+        identity = runtime.deepseek_provider.profile_identity
+        health = runtime.deepseek_provider.health()
+        active_ready = bool(
+            identity is not None
+            and identity.profile_id == profile_id
+            and health.ready
+        )
+        if active_ready or profile.get("status") == "ready":
+            return {
+                "ok": True,
+                "login": {
+                    "profile_id": profile_id,
+                    "provider": provider_id,
+                    "status": "ready",
+                    "authenticated": True,
+                    "ready": True,
+                    "browser_open": active_ready,
+                    "active_browser": active_ready,
+                    "account": profile.get("account", {}),
+                    "models": profile.get("models", []),
+                },
+            }
     if (
         provider_id == runtime.GROK_WEB_PROVIDER_ID
         and not login_running
