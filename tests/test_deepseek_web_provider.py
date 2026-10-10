@@ -145,6 +145,41 @@ class DeepSeekWebProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ProviderEventKind.USAGE, usage[0].kind)
         self.assertEqual(7, decoder.turn().usage["output_tokens"])
 
+    def test_stream_decoder_preserves_compressed_content_patches(self) -> None:
+        decoder = DeepSeekStreamDecoder()
+        frames = [
+            {"p": "response/fragments", "o": "APPEND",
+             "v": [{"type": "THINK", "content": "reason"}]},
+            {"p": "response/fragments/-1/elapsed_secs", "o": "SET", "v": 0.5},
+            {"p": "response/fragments", "o": "APPEND",
+             "v": [{"type": "RESPONSE", "content": "<"}]},
+            {"p": "response/fragments/-1/content", "v": "read"},
+            {"v": "_file>"},
+        ]
+        events = [event for frame in frames for event in decoder.feed("message", frame)]
+        self.assertEqual("<read_file>", decoder.turn().content)
+        self.assertEqual("reason", decoder.turn().thinking)
+        self.assertEqual(
+            "<read_file>",
+            "".join(event.text or "" for event in events
+                    if event.kind is ProviderEventKind.TEXT_DELTA),
+        )
+
+    def test_stream_decoder_does_not_append_compressed_status_values(self) -> None:
+        decoder = DeepSeekStreamDecoder()
+        decoder.feed("message", {
+            "p": "response/fragments", "o": "APPEND",
+            "v": [{"type": "RESPONSE", "content": "answer"}],
+        })
+        decoder.feed("message", {
+            "p": "response/fragments/-1/content", "v": "!",
+        })
+        self.assertEqual((), decoder.feed("message", {
+            "p": "response/status", "o": "SET", "v": "WIP",
+        }))
+        self.assertEqual((), decoder.feed("message", {"v": "FINISHED"}))
+        self.assertEqual("answer!", decoder.turn().content)
+
     def test_unconfigured_provider_fails_closed(self) -> None:
         provider = DeepSeekWebProvider()
 

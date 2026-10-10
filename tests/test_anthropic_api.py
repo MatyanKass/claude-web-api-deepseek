@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from typing import Any
@@ -21,12 +22,14 @@ def native(
     content: str | None = "ok",
     tool_uses: list[NativeToolUse] | None = None,
     usage: dict[str, Any] | None = None,
+    stop_reason: str | None = None,
 ) -> NativeTurn:
     return NativeTurn(
         content=content,
         tool_uses=tool_uses or [],
         usage=usage or {"input_tokens": 11, "output_tokens": 7},
         model="claude-sonnet-4-6",
+        stop_reason=stop_reason,
     )
 
 
@@ -47,6 +50,31 @@ class MessagesEndpointTests(unittest.TestCase):
 
     def post(self, payload: dict[str, Any]):
         return self.client.post("/v1/messages", json=payload)
+
+    def test_native_stop_reason_survives_buffered_live_and_replay_responses(self):
+        for stream, live in ((False, True), (True, True), (True, False)):
+            for reason in ("max_tokens", "refusal", "pause_turn"):
+                with self.subTest(stream=stream, live=live, reason=reason):
+                    behavior = anthropic_api.runtime.control.behavior()
+                    behavior["streaming"] = live
+                    with self.run_with(native("partial", stop_reason=reason)), patch.object(
+                        anthropic_api.runtime.control, "behavior", return_value=behavior
+                    ):
+                        response = self.post({
+                            "model": "claude-web",
+                            "max_tokens": 64,
+                            "stream": stream,
+                            "messages": [{"role": "user", "content": "hi"}],
+                        })
+                    self.assertEqual(200, response.status_code)
+                    if stream:
+                        events = [json.loads(line[6:]) for line in response.text.splitlines()
+                                  if line.startswith("data: ")]
+                        delta = next(event for event in events if event["type"] == "message_delta")
+                        actual = delta["delta"]["stop_reason"]
+                    else:
+                        actual = response.json()["stop_reason"]
+                    self.assertEqual(reason, actual)
 
     def test_text_turn_returns_a_messages_response(self) -> None:
         with self.run_with(native("Привет")):
@@ -446,7 +474,104 @@ class MessagesStreamTests(unittest.TestCase):
         self.assertEqual("api_error", events[-1]["error"]["type"])
 
 
+class MessagesStreamLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def make_stream(self):
+        body = protocol.MessagesIn(
+            model="claude-web", max_tokens=64, stream=True,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        return anthropic_api._message_stream(
+            body, anthropic_api._bridge_request(body), "msg-lifecycle",
+            "claude-web", None, None,
+        )
+
+    async def test_close_or_cancel_waits_for_native_cleanup(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                started = asyncio.Event()
+                cleaned_up = asyncio.Event()
+
+                async def pending(*args, started=started, cleaned_up=cleaned_up, **kwargs):
+                    started.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        # Cleanup itself can suspend while releasing the browser.
+                        await asyncio.sleep(0)
+                        cleaned_up.set()
+
+                with patch.object(completions, "run_native_with_limits", new=pending):
+                    stream = self.make_stream()
+                    try:
+                        await anext(stream)
+                        await asyncio.wait_for(started.wait(), timeout=1)
+                        if cancel:
+                            reader = asyncio.create_task(anext(stream))
+                            await asyncio.sleep(0)
+                            reader.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await reader
+                        else:
+                            await stream.aclose()
+                        self.assertTrue(cleaned_up.is_set())
+                        self.assertFalse(anthropic_api.runtime.telemetry.has_active("msg-lifecycle"))
+                    finally:
+                        await stream.aclose()
+
+    async def test_terminal_event_already_has_completed_telemetry(self):
+        async def completed(*args, **kwargs):
+            return native("ok")
+
+        with patch.object(completions, "run_native_with_limits", new=completed), patch.object(
+            completions, "finish_request_telemetry",
+            wraps=completions.finish_request_telemetry,
+        ) as finish:
+            stream = self.make_stream()
+            try:
+                async for chunk in stream:
+                    if chunk.startswith("event: message_delta"):
+                        self.assertEqual("completed", finish.call_args.kwargs["status"])
+                        self.assertFalse(anthropic_api.runtime.telemetry.has_active("msg-lifecycle"))
+                        break
+                else:
+                    self.fail("terminal message_delta was not emitted")
+            finally:
+                await stream.aclose()
+            finish.assert_called_once()
+
+    async def test_stream_error_waits_for_native_cleanup(self):
+        cleaned_up = asyncio.Event()
+
+        async def retracted(*args, event_sink, **kwargs):
+            event_sink({"type": "text_delta", "text": "partial"})
+            event_sink({"type": "retract"})
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleaned_up.set()
+
+        with patch.object(completions, "run_native_with_limits", new=retracted):
+            stream = self.make_stream()
+            try:
+                async for chunk in stream:
+                    if chunk.startswith("event: error"):
+                        self.assertTrue(cleaned_up.is_set())
+                        self.assertFalse(anthropic_api.runtime.telemetry.has_active("msg-lifecycle"))
+                        break
+                else:
+                    self.fail("stream error was not emitted")
+            finally:
+                await stream.aclose()
+
+
 class TranslationTests(unittest.TestCase):
+    def test_stop_reason_uses_native_limit_even_with_tools(self):
+        calls = [NativeToolUse(id="toolu_1", name="Read", input={})]
+        self.assertEqual("max_tokens", protocol.stop_reason(calls, "max_tokens"))
+        self.assertEqual("max_tokens", protocol.stop_reason([], "max_output_tokens"))
+        self.assertEqual("tool_use", protocol.stop_reason(calls))
+        self.assertEqual("end_turn", protocol.stop_reason([]))
     def test_tool_choice_maps_onto_the_bridge_vocabulary(self) -> None:
         self.assertEqual("auto", protocol.bridge_tool_choice({"type": "auto"}))
         self.assertEqual("required", protocol.bridge_tool_choice({"type": "any"}))

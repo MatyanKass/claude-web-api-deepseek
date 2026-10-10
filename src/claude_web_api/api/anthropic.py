@@ -241,18 +241,8 @@ async def _message_stream(
             index += 1
 
         usage = protocol.anthropic_usage(native.usage)
-        yield _sse(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {
-                    "stop_reason": protocol.stop_reason(native.tool_uses),
-                    "stop_sequence": None,
-                },
-                "usage": {"output_tokens": usage["output_tokens"]},
-            },
-        )
-        yield _sse("message_stop", {"type": "message_stop"})
+        # Clients may close as soon as they see the terminal events.
+        # Finalize telemetry before yielding them.
         completions.finish_request_telemetry(
             request_id,
             status="completed",
@@ -266,12 +256,28 @@ async def _message_stream(
             f"POST /v1/messages завершён ({resolved_model})",
             request_id=request_id,
         )
+        yield _sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": protocol.stop_reason(
+                        native.tool_uses, native.stop_reason
+                    ),
+                    "stop_sequence": None,
+                },
+                "usage": {"output_tokens": usage["output_tokens"]},
+            },
+        )
+        yield _sse("message_stop", {"type": "message_stop"})
     except asyncio.CancelledError:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         completions.finish_request_telemetry(request_id, status="cancelled")
         raise
     except Exception as exc:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         status = completions.exception_status(exc)
         message = (
             sanitize_public_text(exc.detail)
@@ -284,6 +290,13 @@ async def _message_stream(
             error=message,
         )
         yield _sse("error", error_payload(status, message))
+    finally:
+        # GeneratorExit on disconnect also needs to release the browser turn.
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if runtime.telemetry.has_active(request_id):
+            completions.finish_request_telemetry(request_id, status="cancelled")
 
 
 @router.post("/v1/messages")
@@ -370,6 +383,7 @@ async def create_message(
         text=native.content,
         tool_uses=native.tool_uses,
         usage=native.usage,
+        native_stop_reason=native.stop_reason,
     )
     completions.finish_request_telemetry(
         request_id,

@@ -67,6 +67,28 @@ async () => {
 }
 """
 
+_STREAM_BRIDGE_SCRIPT = r"""
+(() => {
+  if (globalThis.__deepseek_bridge_installed) return;
+  globalThis.__deepseek_bridge_installed = true;
+  document.addEventListener("__deepseek_stream_frame", async (event) => {
+    let frame;
+    try { frame = JSON.parse(event.detail); } catch { return; }
+    let ok = false;
+    try {
+      await globalThis.__deepseek_stream(frame.payload);
+      ok = true;
+    } catch {
+      // Send a failure acknowledgement without exporting binding errors.
+    } finally {
+      document.dispatchEvent(new CustomEvent("__deepseek_stream_ack", {
+        detail: JSON.stringify({id: frame.id, ok})
+      }));
+    }
+  });
+})();
+"""
+
 _COMPLETE_SCRIPT = r"""
 async (input) => {
   const isRecord = (value) => (
@@ -216,6 +238,7 @@ async (input) => {
   }
   if (!completionResponse.body) throw new Error("Completion returned no stream");
 
+  let frameIndex = 0;
   const emitBlock = async (block) => {
     if (!block.trim()) return;
     let event = "message";
@@ -232,7 +255,30 @@ async (input) => {
       return;
     }
     if (!isRecord(data)) return;
-    await globalThis.__deepseek_stream({operationId: input.operationId, event, data});
+    // Playwright bindings live in Camoufox's isolated world. DOM events
+    // bridge that world and the page; acknowledge each frame before returning.
+    const id = input.operationId + ":" + frameIndex++;
+    await new Promise((resolve, reject) => {
+      const onAck = (ackEvent) => {
+        let ack;
+        try { ack = JSON.parse(ackEvent.detail); } catch { return; }
+        if (ack.id !== id) return;
+        clearTimeout(timer);
+        document.removeEventListener("__deepseek_stream_ack", onAck);
+        if (ack.ok) resolve();
+        else reject(new Error("DeepSeek stream bridge rejected a frame"));
+      };
+      const timer = setTimeout(() => {
+        document.removeEventListener("__deepseek_stream_ack", onAck);
+        reject(new Error("DeepSeek stream bridge timed out"));
+      }, 10000);
+      document.addEventListener("__deepseek_stream_ack", onAck);
+      document.dispatchEvent(new CustomEvent("__deepseek_stream_frame", {
+        detail: JSON.stringify({
+          id, payload: {operationId: input.operationId, event, data}
+        })
+      }));
+    });
   };
   const reader = completionResponse.body.getReader();
   const decoder = new TextDecoder();
@@ -346,6 +392,7 @@ class DeepSeekCamoufoxTransport:
                 await self._page.expose_binding(
                     "__deepseek_stream", self._receive_stream
                 )
+                await self._page.add_init_script(_STREAM_BRIDGE_SCRIPT)
                 await self._page.goto(
                     DEEPSEEK_WEB_ORIGIN,
                     wait_until="domcontentloaded",

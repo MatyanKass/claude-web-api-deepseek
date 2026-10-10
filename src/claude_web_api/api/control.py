@@ -479,12 +479,12 @@ async def _inspect_profile_login_once(profile_id: str):
         provider_id == runtime.DEEPSEEK_WEB_PROVIDER_ID
         and not login_running
     ):
-        identity = runtime.deepseek_provider.profile_identity
-        health = runtime.deepseek_provider.health()
+        deepseek_identity = runtime.deepseek_provider.profile_identity
+        deepseek_health = runtime.deepseek_provider.health()
         active_ready = bool(
-            identity is not None
-            and identity.profile_id == profile_id
-            and health.ready
+            deepseek_identity is not None
+            and deepseek_identity.profile_id == profile_id
+            and deepseek_health.ready
         )
         if active_ready or profile.get("status") == "ready":
             return {

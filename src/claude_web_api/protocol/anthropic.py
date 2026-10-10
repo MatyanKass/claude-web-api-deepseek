@@ -309,7 +309,9 @@ def content_blocks(
     return blocks
 
 
-def stop_reason(tool_uses: list[Any]) -> str:
+def stop_reason(tool_uses: list[Any], native_reason: str | None = None) -> str:
+    if native_reason:
+        return "max_tokens" if native_reason == "max_output_tokens" else native_reason
     return "tool_use" if tool_uses else "end_turn"
 
 
@@ -320,6 +322,7 @@ def message_response(
     text: str | None,
     tool_uses: list[Any],
     usage: dict[str, Any],
+    native_stop_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": response_id,
@@ -327,7 +330,7 @@ def message_response(
         "role": "assistant",
         "model": model,
         "content": content_blocks(text, tool_uses),
-        "stop_reason": stop_reason(tool_uses),
+        "stop_reason": stop_reason(tool_uses, native_stop_reason),
         "stop_sequence": None,
         "usage": anthropic_usage(usage),
     }

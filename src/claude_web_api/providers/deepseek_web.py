@@ -57,6 +57,8 @@ class DeepSeekStreamDecoder:
         self.request_message_id: str | int | None = None
         self.response_message_id: str | int | None = None
         self.closed = False
+        self._patch_path: str | None = None
+        self._patch_operation: str | None = None
 
     def feed(
         self,
@@ -80,25 +82,32 @@ class DeepSeekStreamDecoder:
             self._set_usage(response.get("accumulated_token_usage"), updates)
             return tuple(updates)
 
-        if data.get("p") == "response/fragments" and data.get("o") == "APPEND":
+        # DeepSeek omits unchanged patch metadata. For example, the first
+        # content patch after a RESPONSE fragment has a path but no operation;
+        # APPEND is inherited from the previous fragment patch. Dropping it
+        # truncates ordinary text as well as XML instructions sent by clients.
+        if "p" in data:
+            self._patch_path = str(data["p"])
+        if "o" in data:
+            self._patch_operation = str(data["o"])
+        path = self._patch_path
+        operation = self._patch_operation
+
+        if path == "response/fragments" and operation == "APPEND":
             updates.extend(self._fragments(data.get("v")))
             return tuple(updates)
 
         content_append = (
-            data.get("p") == "response/fragments/-1/content"
-            and data.get("o") == "APPEND"
+            path == "response/fragments/-1/content" and operation == "APPEND"
         )
-        root_append = "p" not in data and data.get("o") == "APPEND" and "v" in data
-        bare_string = (
-            "p" not in data and "o" not in data and isinstance(data.get("v"), str)
-        )
-        if content_append or root_append or bare_string:
+        root_append = path is None and operation == "APPEND"
+        if (content_append or root_append) and isinstance(data.get("v"), str):
             update = self._text_update(str(data.get("v") or ""))
             return (update,) if update is not None else ()
 
         if (
-            data.get("p") == "response"
-            and data.get("o") == "BATCH"
+            path == "response"
+            and operation == "BATCH"
             and isinstance(data.get("v"), list)
         ):
             for patch in data["v"]:
