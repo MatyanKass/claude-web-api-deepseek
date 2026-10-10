@@ -348,6 +348,11 @@ class DeepSeekCamoufoxTransport:
             display_name=self.display_name,
         )
 
+    @property
+    def conversation_id(self) -> str | None:
+        """The DeepSeek chat the next turn continues, if any."""
+        return self._session_id
+
     def health(self) -> ProviderHealth:
         return ProviderHealth(
             live=self._phase not in {"stopped", "browser_dead"},

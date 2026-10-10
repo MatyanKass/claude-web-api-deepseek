@@ -243,6 +243,12 @@ class DeepSeekWebProvider:
             return None
         return self._transport.profile_identity
 
+    @property
+    def conversation_id(self) -> str | None:
+        """The live DeepSeek chat, when the transport reports one."""
+        value = getattr(self._transport, "conversation_id", None)
+        return value if isinstance(value, str) and value else None
+
     def health(self) -> ProviderHealth:
         if self._transport is None:
             return ProviderHealth(

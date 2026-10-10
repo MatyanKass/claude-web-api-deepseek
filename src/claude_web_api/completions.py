@@ -16,6 +16,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from claude_web_api import runtime
+from claude_web_api.protocol.deepseek import DeepSeekLineage
+from claude_web_api.protocol.deepseek import plan_turn as plan_deepseek_turn
 from claude_web_api.protocol.openai import (
     OPENCLAUDE_CONTEXT_TOOL_NAME,
     ParsedAssistant,
@@ -182,6 +184,11 @@ def _rollover_message(body: CompletionsIn, reason: str) -> str:
     )
 
 
+# What each DeepSeek profile's live chat has already been shown, so a turn
+# that continues it sends only the new messages. Keyed by profile id.
+_deepseek_lineage: dict[str, DeepSeekLineage] = {}
+
+
 async def deepseek_request(
     body: CompletionsIn,
     *,
@@ -197,34 +204,31 @@ async def deepseek_request(
             "DeepSeek Web does not expose a verified native function-calling "
             "channel; remove tools from this request",
         )
-    user_input = actionable_input(body.messages)
-    fresh_chat = bool(
-        body.new_chat
-        or (not client_session_id and _client_starts_fresh_chat(body))
-    )
-    outbound_message = user_input
-    history = history_text(body.messages[:-1])
-    if fresh_chat and history:
-        outbound_message = (
-            "Continue the conversation represented by the transcript below.\n\n"
-            "EARLIER_CONVERSATION\n"
-            + history[-60_000:]
-            + "\n\nCURRENT_USER_REQUEST\n"
-            + user_input
-        )
-    outbound_message = user_selected_persona_message(
-        outbound_message,
-        persona_instruction,
-    )
+    profile_id = runtime.active_profile_id()
     provider = runtime.provider_registry.resolve(
         provider_id=DEEPSEEK_WEB_PROVIDER_ID,
-        profile_id=runtime.active_profile_id(),
+        profile_id=profile_id,
     )
+    lineage_key = str(profile_id or "")
+    try:
+        plan = plan_deepseek_turn(
+            body.messages,
+            lineage=_deepseek_lineage.get(lineage_key),
+            live_conversation_id=getattr(provider, "conversation_id", None),
+            client_session_id=client_session_id,
+            force_new=body.new_chat,
+            persona_instruction=persona_instruction,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # A failed or interrupted turn leaves the chat in an unknown state; the
+    # next request rebuilds it from the client's history.
+    _deepseek_lineage.pop(lineage_key, None)
     turn = await provider.complete(
         ProviderTurnRequest(
-            message=outbound_message,
+            message=plan.prompt,
             timeout_seconds=body.timeout,
-            new_conversation=fresh_chat,
+            new_conversation=plan.new_conversation,
             parallel_tool_calls=False,
             model=body.model,
             reasoning_mode=str(behavior_snapshot["thinking"]),
@@ -234,6 +238,12 @@ async def deepseek_request(
         ),
         event_sink=_provider_event_sink(event_sink),
     )
+    conversation_id = getattr(provider, "conversation_id", None)
+    if isinstance(conversation_id, str) and conversation_id:
+        _deepseek_lineage[lineage_key] = plan.lineage_after_reply(
+            conversation_id,
+            client_session_id,
+        )
     return _provider_turn_as_native(turn)
 
 def _native_tools_with_runtime(
