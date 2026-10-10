@@ -1,4 +1,4 @@
-# AGENTS.md
+﻿# AGENTS.md
 
 Working notes for agents and future sessions. Records how this project is
 actually built, not how it might ideally be built.
@@ -13,7 +13,7 @@ Anthropic, OpenAI or xAI API key is involved anywhere.
 The point is that a coding client (OpenClaude, or the official Claude Code)
 keeps its own agent loop and host tools, while the bridge carries the
 conversation and the tool schemas to Claude in the browser and streams the
-answer back. Tool calls come from Claude's own native `tool_use` stream — the
+answer back. Tool calls come from Claude's own native `tool_use` stream вЂ” the
 bridge never guesses a tool call from response text.
 
 ## Layout
@@ -32,6 +32,7 @@ src/claude_web_api/
   protocol/         pure translation, no I/O, no routing
     openai.py       OpenAI <-> internal history and native tools
     anthropic.py    Messages blocks <-> internal history
+    deepseek.py     history -> DeepSeek Web prompt; chat lineage tracking
     openai_usage.py provider token counts -> OpenAI usage shape
   providers/        contracts, registry, claude_web, grok_web
   session/          the browser driver, one module per concern
@@ -51,7 +52,7 @@ src/claude_web_api/
   telemetry/        runtime journal + SQLite store
   enrollment/       adding an account through a visible browser
 web/                control panel (plain HTML/CSS/JS, no build step)
-tests/              unittest; 229 tests, no browser required
+tests/              unittest; 328 tests, no browser required
 scripts/            PowerShell entry points (Windows is the primary host)
 ```
 
@@ -70,10 +71,16 @@ Checks, from the repository root:
 .\.python\python.exe -m ruff check .
 ```
 
+The portable runtime ships without the dev tools; install them once with
+`.\.python\python.exe -m pip install httpx ruff mypy` (Starlette's test client
+needs `httpx`, and its import error misleadingly names `httpx2`).
+
 The suite is a package: `tests/__init__.py` redirects the telemetry database
-to a temporary file before anything imports `claude_web_api`, which is why
+and the data root (`CLAUDE_WEB_API_DATA`) to temporary paths before anything
+imports `claude_web_api` вЂ” without the latter the developer's active provider
+leaks into the results вЂ” which is why
 discovery runs with `-t .` and shared fixtures are imported as
-`from tests.support import ...`. The tests never launch a browser —
+`from tests.support import ...`. The tests never launch a browser вЂ”
 everything below the provider boundary is faked.
 
 ## Rules that keep this working
@@ -89,14 +96,14 @@ delivered, it fails visibly: unsupported content blocks return 400, the Grok
 provider reports `streaming=false` rather than pretending, and absent token
 counts are reported as zero rather than estimated. The one documented
 exception is `POST /v1/messages/count_tokens`, which returns a character-length
-estimate because claude.ai exposes no tokenizer — it is labelled as an estimate
+estimate because claude.ai exposes no tokenizer вЂ” it is labelled as an estimate
 in the code, the README and the docs.
 
 **Project Instructions are a stable contract.** `resources/project_instructions.txt`
 is synced into each account's `OpenClaude IDE` project prompt and verified
 before a turn is sent. Per-request context (working directory, model, persona)
 is request-scoped and never written into the project prompt. If you change that
-file, understand `_sync_trusted_project` in `session/claude.py` first — a
+file, understand `_sync_trusted_project` in `session/claude.py` first вЂ” a
 mismatch stops sending rather than overwriting someone's edit.
 
 **Redact before anything leaves.** Errors, journal entries and panel responses
@@ -111,7 +118,7 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 
 - **The stream tap must live in the page world.** Camoufox runs automation
   scripts in a world isolated from the page, so patching `fetch` from an init
-  script has no effect on the application's own requests — the patch and the
+  script has no effect on the application's own requests вЂ” the patch and the
   page each see their own globals. `SSE_TAP_SCRIPT` therefore injects itself
   into the page through a `<script>` element and reports back over a DOM
   event, which both worlds share. Symptom when this breaks: the turn is
@@ -127,7 +134,7 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
   every attribute `ClaudeSession.__init__` creates and every method the mixins
   call across module boundaries. Add a new cross-mixin call there too, or the
   type checker cannot see it and a typo only surfaces at runtime.
-- Several session modules embed browser-side JavaScript in string literals —
+- Several session modules embed browser-side JavaScript in string literals вЂ”
   that is why they are exempt from `E501` in `pyproject.toml`. Reflowing those
   literals changes the code that runs in the page.
 - Tests patch names where they are *read*, not where they were defined. Moving
@@ -151,8 +158,15 @@ left a decorator behind and silently re-bound `/api/control/state` to `main()`.
 - **A client hanging up is normal, not a browser failure.** Ctrl+C in the IDE
   cancels the request mid-turn; the bridge abandons the pending tool call and
   sets `_fresh_chat_required` so the next turn starts clean. Do not restore the
-  old behaviour of marking the browser dead there — five interruptions then hit
+  old behaviour of marking the browser dead there вЂ” five interruptions then hit
   the restart circuit and take the bridge down.
+- **DeepSeek Web has no system role.** The client's system prompt (Roo Code's
+  XML tool contract lives there) is sent as the opening of a fresh chat by
+  `protocol/deepseek.py`. Continuation turns send only messages the live chat
+  has not seen; any divergence (new task, edited history, changed system
+  prompt, restarted browser, failed turn) rebuilds a fresh chat from the
+  client's transcript. Assistant messages are matched by position only,
+  because clients rewrite them.
 - The Grok provider is deliberately fail-closed: xAI blocks automated browsers,
   so it reports no capabilities and refuses activation. Do not "fix" it by
   making it claim support.
